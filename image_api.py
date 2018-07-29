@@ -1,10 +1,6 @@
 import numpy as np
 from PIL import Image
 
-_CROP_SIZE = (224, 224)
-_IMAGE_MEANS = [0.485, 0.456, 0.406]
-_IMAGE_STDDEVS = [0.229, 0.224, 0.225]
-
 def make_image(path):
     """
         Return numpy image pre-processed for use 
@@ -25,8 +21,9 @@ def make_image(path):
     width, height = image.size
 
     # Crop center of the image
-    dx = (width - _CROP_SIZE[0]) // 2
-    dy = (height - _CROP_SIZE[1]) // 2
+    crop_width, crop_height = get_crop_size()
+    dx = (width - crop_width) // 2
+    dy = (height - crop_height) // 2
     left, right = dx, width - dx
     top, bottom = dy, height - dy
     image = image.crop((left, top, right, bottom))
@@ -34,10 +31,26 @@ def make_image(path):
     np_image = np.array(image, dtype=np.float32)
 
     np_image /= 255.
-    np_image -= _IMAGE_MEANS
-    np_image /= _IMAGE_STDDEVS
+    np_image -= get_image_means()
+    np_image /= get_image_std()
     np_image = np_image.transpose((2, 0, 1))
 
     return np_image
 
+def get_crop_size():
+    """Return crop size tuple (width, height)
+    """
+    return (224, 224)
+
+def get_image_means():
+    """Return image statistical prop: 
+        mean values per channel.
+    """
+    return [0.485, 0.456, 0.406]
+
+def get_image_std():
+    """Return image statistical prop: 
+        deviation values per channel.
+    """
+    return [0.229, 0.224, 0.225]
 

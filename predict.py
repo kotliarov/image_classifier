@@ -5,7 +5,7 @@ import json
 import torch
 import numpy as np
 
-from image_api import make_image
+from image_api import make_image, get_crop_size
 from model_api import make_model_from_checkpoint
 
 def predict(image_path, model, topk=5):
@@ -15,8 +15,9 @@ def predict(image_path, model, topk=5):
     """
     model.eval()
     with torch.no_grad():
+        crop_width, crop_height = get_crop_size()
         image = torch.tensor(make_image(image_path))
-        image = image.reshape((1, 3, 224, 224))
+        image = image.reshape((1, 3, crop_width, crop_height))
         image = image.to(model.device)
         y_hat = model.forward(image)
         estimate = torch.exp(y_hat)
@@ -37,7 +38,7 @@ def main():
         path = os.path.abspath(path)
         if not os.path.exists(path):
             raise argparse.ArgumentTypeError('Not a valid path: {}'.format(path))
-        if not os.isfile(path):
+        if not os.path.isfile(path):
             raise argparse.ArgumentTypeError('Not a file: {}'.format(path))
         return path
 
@@ -61,11 +62,27 @@ def main():
                              required=True, 
                              help='path to an image file')
 
-    args_parser.add_argument('--checkpoint',
+    # Model source could be
+    # a) model's checkpoint file.
+    # b) reference to a model's checkpoint file, 
+    #    where reference is a checkpoint file that contains following object:
+    #    { 
+    #       checkpoint': <path-to-model-checkpoint>, 
+    #       score: <model-score> 
+    #    }
+    model_source = args_parser.add_mutually_exclusive_group()
+    
+    model_source.add_argument('--checkpoint',
                              dest='checkpoint_path', 
-                             type=lambda x: arg_as_json(arg_as_filetype(x)),
+                             type=arg_as_filetype,
                              required=True, 
                              help='path to a file with model checkpoint')
+
+    model_source.add_argument('--checkpoint-ref',
+                             dest='checkpoint_ref_path', 
+                             type=arg_as_filetype,
+                             required=True, 
+                             help='path to a file with reference to model checkpoint')
 
     args_parser.add_argument('--topk', 
                                 dest='topk', 

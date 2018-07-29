@@ -23,8 +23,7 @@ def make_model_from_checkpoint(path, class_to_name, use_gpu=True):
                        clf_descriptor['dropout'])
     model.classifier.load_state_dict(checkpoint['classifier.state_dict'])
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") if use_gpu 
-                                                                            else "cpu"
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") if use_gpu else torch.device("cpu")
     model.to(device)
     model.device = device
     return model
@@ -79,5 +78,5 @@ def pretrained_model_factory(arch):
        'densenet161': lambda: tv.models.densenet161(pretrained=True),
        'densenet201': lambda: tv.models.densenet201(pretrained=True),
     }
-    return  models[name]
+    return  models[arch]
 
