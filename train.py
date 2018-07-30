@@ -5,11 +5,86 @@ import torch
 import numpy as np
 
 import model_api
+import data_api
 
-def train_var_learn_rate(args):
-    pass
+_MOMENTUM = 0.8
+_REPORT_EVERY_N_ITER = 30
 
-def train_const_learn_rate(args):
+def train_with_variable_learning_rate(args):
+    """
+    """
+    datasource = data_api.make_dataloaders(args.data_path, args.batch_size)
+    checkpoint = data_api.make_checkpoint_store(args.checkpoint_dir)
+    num_batches = len(iter(datasource.train)) 
+    cycle_period = args.epochs_per_cycle * num_batches # cycle period
+    print("n={} num-iter-per-epoch={} T={}".format(num_batches*args.batch_size, 
+                                                   num_batches, 
+                                                   cycle_period))
+    device = model_api.make_device(args.use_gpu)
+    model = model_api.make_model(model_api.pretrained_model_factory(args.arch_name),
+                                 args.output_size,
+                                 args.hidden_layers,
+                                 args.dropout)                       
+    model.to(device)
+    
+    criterion = torch.nn.NLLLoss()
+    optimizer = torch.optim.SGD(model.classifier.parameters(), 
+                                lr=args.max_learning_rate, 
+                                momentum=_MOMENTUM)
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cycle_period)
+    progress_tracker = model_api.ProgressTracker(model, 
+                                                device, 
+                                                datasource.validate, 
+                                                criterion, 
+                                                lr_scheduler, 
+                                                _REPORT_EVERY_N_ITER)
+    best_score = 0.
+    best_model_ref = None
+    learning_rate = max_learning_rate
+    
+    for epoch_no in range(1, args.epochs_per_cycle * args.num_cycles + 1):
+        progress_tracker.epoch = epoch_no
+        train_loss = train(model, 
+                           device, 
+                           datasource.train, 
+                           criterion, 
+                           optimizer, 
+                           progress_tracker)
+        # Make checkpoint at the end of a cycle.
+        if epoch_no % args.epochs_per_cycle == 0:
+           checkpoint.store("checkpoint_epoch_{}.pth".format(epoch_no), 
+                            model, 
+                            classifier = {"architecture": args.arch_name,
+                                          "output-size": args.output_size,
+                                          "hidden-layers": args.hidden_layers,
+                                          "dropout": args.dropout},
+                            epoch=epoch_no, 
+                            report=progress_tracker.performance_report,
+                            class_to_index=datasource.train.class_to_idx)
+
+            _, valid_acc = validation_score(model, 
+                                           device, 
+                                           datasource.validate, 
+                                           criterion)
+            if valid_acc > best_score:
+                best_score = valid_acc
+                best_model_ref = checkpoint_filename
+                
+            # Reset learning rate to max_learning_rate * dumping_koeff
+            learning_rate = learning_rate * args.dumping_koeff
+            optimizer = torch.optim.SGD(model.classifier.parameters(), 
+                                        lr=learning_rate, 
+                                        momentum=_MOMENTUM)
+            progress_tracker.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 
+                                                                                       cycle_period)
+
+    # Persist reference to best model's checkpoint
+    checkpoint.store_reference("best_model.pth", 
+                                best_score, 
+                                best_model_ref)
+    return model, progress_tracker.performance_report
+
+def train_with_const_learn_rate(args):
     pass
 
 def main():
@@ -70,7 +145,7 @@ def main():
                              type=arg_as_dir,
                              required=True, 
                              help='path to a directory with data set')
-    args_parser.add_argument('--checkpoint-dir',
+    args_parser.add_argument('--checkpoint-path',
                              dest='checkpoint_dir_path', 
                              type=lambda x: arg_as_dir(x, True),
                              required=True, 
@@ -91,12 +166,17 @@ def main():
                        type=arg_as_arch,
                        default='vgg19',
                        help='pre-trained model name')
-    model.add_argument('--hidden-units',
-                       dest='hidden_units',
+    model.add_argument('--hidden-layers',
+                       dest='hidden_layers',
                        nargs='+',
                        type=int,
                        required=True,
                        help='collection of hidden units size: --hidden-units 1024 2048 512')
+    model.add_argument('--output-size',
+                       dest='output_size',
+                       type=int,
+                       required=True,
+                       help='output size; number of classes')
     model.add_argument('--dropout',
                        dest='dropout',
                        type=float,
@@ -121,7 +201,7 @@ def main():
                             required=True,
                             help='number of epochs to train model')
    
-    const_learn_rate.set_defaults(fund=train_const_learn_rate)
+    const_learn_rate.set_defaults(func=train_with_const_learning_rate)
  
     var_learn_rate = sp.add_parser('adjust-learn-rate', parents=[args_parser], help='Train NN with variable  learning rate over epochs')
     var_learn_rate.add_argument('--max-learning-rate',
@@ -139,13 +219,13 @@ def main():
                                   type=int,
                                   required=True,
                                   help='number of training cycles')
-    var_learn_rate.add_argument('--dump',
-                                  dest='dump',
+    var_learn_rate.add_argument('--dump-koeff',
+                                  dest='dumpig_koeff',
                                   type=float,
                                   default=1.0, 
                                   choices=[Range(0.1, 1.0)],
                                   help='koefficient to reduce max learning rate between cycles')
-    var_learn_rate.set_defaults(fund=train_var_learn_rate)
+    var_learn_rate.set_defaults(func=train_with_variable_learning_rate)
  
     args = parser.parse_args()
 
