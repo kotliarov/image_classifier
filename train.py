@@ -7,42 +7,82 @@ import numpy as np
 import model_api
 import data_api
 
-_MOMENTUM = 0.8
 _REPORT_EVERY_N_ITER = 30
 
 def train_with_variable_learning_rate(args):
     """
     """
-    datasource = data_api.make_dataloaders(args.data_path, args.batch_size)
-    checkpoint = data_api.make_checkpoint_store(args.checkpoint_dir)
-    num_batches = len(iter(datasource.train)) 
-    cycle_period = args.epochs_per_cycle * num_batches # cycle period
-    print("n={} num-iter-per-epoch={} T={}".format(num_batches*args.batch_size, 
-                                                   num_batches, 
-                                                   cycle_period))
-    device = model_api.make_device(args.use_gpu)
-    model = model_api.make_model(model_api.pretrained_model_factory(args.arch_name),
-                                 args.output_size,
-                                 args.hidden_layers,
-                                 args.dropout)                       
+    train_nn(data_path=args.data_path, 
+             checkpoint_dir=args.checkpoint_dir, 
+             arch_name=args.arch_name,
+             hidden_layers=args.hidden_layers, 
+             output_size=args.output_size, 
+             dropout=args.dropout,
+             epochs=args.epochs_per_cycle * args.num_cycles,
+             epochs_per_cycle=args.epochs_per_cycle,
+             learning_rate='cosine',
+             learning_rate_init=args.max_learning_rate,
+             dump_koeff=args.dump_koeff,
+             batch_size=args.batch_size,
+             use_gpu=args.use_gpu)
+
+
+def train_with_const_learn_rate(args):
+    """
+    """
+    train_nn(data_path=args.data_path, 
+             checkpoint_dir=args.checkpoint_dir, 
+             arch_name=args.arch_name,
+             hidden_layers=args.hidden_layers, 
+             output_size=args.output_size, 
+             dropout=args.dropout,
+             epochs=args.epochs,
+             epochs_per_cycle=1,
+             learning_rate='constant',
+             learning_rate_init=args.learning_rate,
+             batch_size=args.batch_size,
+             use_gpu=args.use_gpu)
+
+def train_nn(data_path, checkpoint_dir, arch_name, hidden_layers, output_size, dropout,
+              epochs, learning_rate='cosine', learning_rate_init=0.02, dump_koeff=1.0, 
+              batch_size=96, epochs_per_cycle=1, momentum=0.8, use_gpu=True):
+    """
+    """
+    datasource = data_api.make_dataloaders(data_path, batch_size)
+    device = model_api.make_device(use_gpu)
+    model = model_api.make_model(model_api.pretrained_model_factory(arch_name),
+                                 output_size,
+                                 hidden_layers,
+                                 dropout)                       
     model.to(device)
     
     criterion = torch.nn.NLLLoss()
     optimizer = torch.optim.SGD(model.classifier.parameters(), 
-                                lr=args.max_learning_rate, 
-                                momentum=_MOMENTUM)
-    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cycle_period)
+                                lr=learning_rate_init, 
+                                momentum=momentum)
+    if learning_rate == 'cosine':
+        num_batches = len(iter(datasource.train))
+        cycle_period = args.epochs_per_cycle * num_batches   
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cycle_period)
+        print("n={} num-iter-per-epoch={} cycle-period={}".format(num_batches*batch_size, 
+                                                                  num_batches, 
+                                                                  cycle_period))
+    else:
+        lr_scheduler = None
+
     progress_tracker = model_api.ProgressTracker(model, 
-                                                device, 
-                                                datasource.validate, 
-                                                criterion, 
-                                                lr_scheduler, 
-                                                _REPORT_EVERY_N_ITER)
+                                                 device, 
+                                                 datasource.validate, 
+                                                 criterion, 
+                                                 lr_scheduler=lr_scheduler, 
+                                                 learning_rate_init=learning_rate_init,
+                                                 report_every_n=_REPORT_EVERY_N_ITER)
     best_score = 0.
     best_model_ref = None
-    learning_rate = max_learning_rate
-    
-    for epoch_no in range(1, args.epochs_per_cycle * args.num_cycles + 1):
+    learning_rate_value = learning_rate_init
+    checkpoint = data_api.make_checkpoint_store(checkpoint_dir)
+   
+    for epoch_no in range(1, epochs + 1):
         progress_tracker.epoch = epoch_no
         train_loss = train(model, 
                            device, 
@@ -52,40 +92,38 @@ def train_with_variable_learning_rate(args):
                            progress_tracker)
         # Make checkpoint at the end of a cycle.
         if epoch_no % args.epochs_per_cycle == 0:
-           checkpoint.store("checkpoint_epoch_{}.pth".format(epoch_no), 
-                            model, 
-                            classifier = {"architecture": args.arch_name,
+            filename = "checkpoint_epoch_{}.pth".format(epoch_no)
+            checkpoint.store(filename, 
+                             model, 
+                             classifier = {"architecture": args.arch_name,
                                           "output-size": args.output_size,
                                           "hidden-layers": args.hidden_layers,
                                           "dropout": args.dropout},
-                            epoch=epoch_no, 
-                            report=progress_tracker.performance_report,
-                            class_to_index=datasource.train.class_to_idx)
+                             epoch=epoch_no, 
+                             report=progress_tracker.performance_report,
+                             class_to_index=datasource.train.class_to_idx)
 
             _, valid_acc = validation_score(model, 
-                                           device, 
-                                           datasource.validate, 
-                                           criterion)
+                                            device, 
+                                            datasource.validate, 
+                                            criterion)
             if valid_acc > best_score:
                 best_score = valid_acc
-                best_model_ref = checkpoint_filename
-                
-            # Reset learning rate to max_learning_rate * dumping_koeff
-            learning_rate = learning_rate * args.dumping_koeff
-            optimizer = torch.optim.SGD(model.classifier.parameters(), 
-                                        lr=learning_rate, 
-                                        momentum=_MOMENTUM)
-            progress_tracker.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 
-                                                                                       cycle_period)
+                best_model_ref = filename
+               
+            if lr_scheduler is not None: 
+                learning_rate_value = learning_rate_value * dump_koeff
+                optimizer = torch.optim.SGD(model.classifier.parameters(), 
+                                            lr=learning_rate_value, 
+                                            momentum=momentum)
+                lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cycle_period)
+                progress_tracker.lr_scheduler = lr_scheduler
 
     # Persist reference to best model's checkpoint
     checkpoint.store_reference("best_model.pth", 
                                 best_score, 
                                 best_model_ref)
     return model, progress_tracker.performance_report
-
-def train_with_const_learn_rate(args):
-    pass
 
 def main():
     """

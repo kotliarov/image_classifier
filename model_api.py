@@ -150,20 +150,24 @@ def accuracy_score(model, device, dataloader):
 class ProgressTracker(object):
     """ Track NN training performance.
     """
-    def __init__(self, model, device, dataloader, criterion, lr_scheduler, report_every_n):
+    def __init__(self, model, device, dataloader, criterion, lr_scheduler, learning_rate_init, report_every_n):
         """
-            @model       ::= model
-            @device      ::= device (cuda or cpu)
-            @dataloader  ::= validation data loader
-            @criterion   ::= loss criterion
-            @lr_scheduler::= learning rate scheduler
-            @report_every_n    ::= defines number of training batches between validation tests.
+            Parameters:
+
+            model          ::= model
+            device         ::= device (cuda or cpu)
+            dataloader     ::= validation data loader
+            criterion      ::= loss criterion
+            lr_scheduler   ::= learning rate scheduler
+            learning_rate_value ::= learning_rate_init value
+            report_every_n ::= defines number of training batches between validation tests.
         """
         self.model_ = model
         self.device_ = device
         self.dataloader_ = dataloader
         self.criterion_ = criterion
         self.lr_scheduler_ = lr_scheduler
+        self.learning_rate_init_ = learning_rate_init
         self.report_every_n_ = report_every_n
         self.perf_report_ = []
         self.acc_ = []
@@ -196,9 +200,12 @@ class ProgressTracker(object):
         - Record performance metrics (train-loss, validation-loss, validation-accuracy).
         """
         # Adjust learning rate
-        lr_rate = self.lr_scheduler_.get_lr()[0]
-        self.lr_scheduler_.step()
-        
+        if self.lr_scheduler_ is not None:
+            lr_rate = self.lr_scheduler_.get_lr()[0]
+            self.lr_scheduler_.step()
+        else:
+            lr_rate = self.learning_rate_init_
+
         self.acc_.append(train_loss)
         n = len(self.acc_)
         if n % self.report_every_n_ == 0:
