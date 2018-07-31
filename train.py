@@ -258,7 +258,7 @@ def main():
                                   required=True,
                                   help='number of training cycles')
     var_learn_rate.add_argument('--dump-koeff',
-                                  dest='dumpig_koeff',
+                                  dest='dump_koeff',
                                   type=float,
                                   default=1.0, 
                                   choices=[Range(0.1, 1.0)],

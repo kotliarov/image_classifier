@@ -81,16 +81,16 @@ def pretrained_model_factory(arch):
     return  models[arch]
 
 def train(model, device, dataloader, criterion, optimizer, progress_tracker):
-    """
-    Return 
-        mean train loss over all iteration of the current epoch.
+    """ Train neural net for one epoch.
+        Return mean train loss over all iteration of the current epoch.
 
+        Parameters:
         model      ::= network model
         device     ::= gpu or cpu device
         dataloader ::= test data source
         criterion  ::= cost function
         optimizer  ::= weights update policy
-        progress_tracker ::= callable, keeps track fo training progress.
+        progress_tracker ::= callable, keeps track of training process' progress.
     """
     train_loss = []
     for x, y in iter(dataloader):
