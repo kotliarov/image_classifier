@@ -13,7 +13,7 @@ def train_with_variable_learning_rate(args):
     """
     """
     train_nn(data_path=args.data_path, 
-             checkpoint_dir=args.checkpoint_dir, 
+             checkpoint_dir=args.checkpoint_path, 
              arch_name=args.arch_name,
              hidden_layers=args.hidden_layers, 
              output_size=args.output_size, 
@@ -27,11 +27,11 @@ def train_with_variable_learning_rate(args):
              use_gpu=args.use_gpu)
 
 
-def train_with_const_learn_rate(args):
+def train_with_const_learning_rate(args):
     """
     """
     train_nn(data_path=args.data_path, 
-             checkpoint_dir=args.checkpoint_dir, 
+             checkpoint_dir=args.checkpoint_path, 
              arch_name=args.arch_name,
              hidden_layers=args.hidden_layers, 
              output_size=args.output_size, 
@@ -61,18 +61,18 @@ def train_nn(data_path, checkpoint_dir, arch_name, hidden_layers, output_size, d
                                 lr=learning_rate_init, 
                                 momentum=momentum)
     if learning_rate == 'cosine':
-        num_batches = len(iter(datasource.train))
-        cycle_period = args.epochs_per_cycle * num_batches   
+        num_batches = len(datasource.train)
+        cycle_period = epochs_per_cycle * num_batches   
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cycle_period)
-        print("n={} num-iter-per-epoch={} cycle-period={}".format(num_batches*batch_size, 
-                                                                  num_batches, 
-                                                                  cycle_period))
+        print("samples={} iter-per-epoch={} iter-per-cycle={}".format(num_batches*batch_size, 
+                                                                      num_batches, 
+                                                                      cycle_period))
     else:
         lr_scheduler = None
 
     progress_tracker = model_api.ProgressTracker(model, 
                                                  device, 
-                                                 datasource.validate, 
+                                                 datasource.validation, 
                                                  criterion, 
                                                  lr_scheduler=lr_scheduler, 
                                                  learning_rate_init=learning_rate_init,
@@ -84,29 +84,28 @@ def train_nn(data_path, checkpoint_dir, arch_name, hidden_layers, output_size, d
    
     for epoch_no in range(1, epochs + 1):
         progress_tracker.epoch = epoch_no
-        train_loss = train(model, 
-                           device, 
-                           datasource.train, 
-                           criterion, 
-                           optimizer, 
-                           progress_tracker)
+        train_loss = model_api.train(model, 
+                                     device, 
+                                     datasource.train, 
+                                     criterion, 
+                                     optimizer, 
+                                     progress_tracker)
         # Make checkpoint at the end of a cycle.
-        if epoch_no % args.epochs_per_cycle == 0:
+        if epoch_no % epochs_per_cycle == 0:
             filename = "checkpoint_epoch_{}.pth".format(epoch_no)
             checkpoint.store(filename, 
                              model, 
-                             classifier = {"architecture": args.arch_name,
-                                          "output-size": args.output_size,
-                                          "hidden-layers": args.hidden_layers,
-                                          "dropout": args.dropout},
+                             classifier = {"architecture": arch_name,
+                                          "output-size": output_size,
+                                          "hidden-layers": hidden_layers,
+                                          "dropout": dropout},
                              epoch=epoch_no, 
                              report=progress_tracker.performance_report,
-                             class_to_index=datasource.train.class_to_idx)
+                             class_to_index=datasource.class_to_index)
 
-            _, valid_acc = validation_score(model, 
-                                            device, 
-                                            datasource.validate, 
-                                            criterion)
+            valid_acc = model_api.accuracy_score(model, 
+                                                 device, 
+                                                 datasource.validation)
             if valid_acc > best_score:
                 best_score = valid_acc
                 best_model_ref = filename
@@ -184,7 +183,7 @@ def main():
                              required=True, 
                              help='path to a directory with data set')
     args_parser.add_argument('--checkpoint-path',
-                             dest='checkpoint_dir_path', 
+                             dest='checkpoint_path', 
                              type=lambda x: arg_as_dir(x, True),
                              required=True, 
                              help='path to a directory to store model checkpoints')
@@ -243,7 +242,7 @@ def main():
  
     var_learn_rate = sp.add_parser('adjust-learn-rate', parents=[args_parser], help='Train NN with variable  learning rate over epochs')
     var_learn_rate.add_argument('--max-learning-rate',
-                                  dest='max_learn_rate',
+                                  dest='max_learning_rate',
                                   type=float,
                                   required=True,
                                   help='max learning rate')

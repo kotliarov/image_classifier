@@ -1,15 +1,15 @@
+from collections import OrderedDict
 import numpy as np
 import torch
 import torchvision as tv
 
-def make_model_from_checkpoint(path, class_to_name, use_gpu=True):
-    """
-        Return trained model from checkpoint file.
-    """
-    # Read checkpoint file and re-map storage
-    # to lowest common denominator - 'cpu'.
-    checkpoint = torch.load(path, map_location=lambda storage, loc: storage)
+def make_model_from_checkpoint(checkpoint):
+    """ Return trained model from checkpoint.
 
+	Parameters:
+
+	checkpoint ::= dictionary with model state and properties. 
+    """
     classifier = checkpoint['classifier']
     
     model = make_model(pretrained_model_factory(classifier["architecture"]),
@@ -17,10 +17,6 @@ def make_model_from_checkpoint(path, class_to_name, use_gpu=True):
                        classifier['hidden-layers'],
                        classifier['dropout'])
     model.classifier.load_state_dict(checkpoint['classifier.state_dict'])
-
-    device = make_device(use_gpu)
-    model.to(device)
-    model.device = device
     return model
 
 def make_model(pretrained_model_factory, output_size, hidden_layers, drop_prob=0.3):
@@ -105,10 +101,10 @@ def train(model, device, dataloader, criterion, optimizer, progress_tracker):
         progress_tracker(loss.item())
     return np.mean(train_loss)
 
-def validation_score(model, device, dataloader, criterion):
+def accuracy_loss_score(model, device, dataloader, criterion):
     """
-    Return pair (loss, accuracy) per validation set.
-    Loss and accuracy are averaged over validation batches.
+    Return pair (accuracy, loss) per data set.
+    Loss and accuracy are averaged over the dataset batches.
     
         model      ::= network model
         device     ::= gpu or cpu device
@@ -117,30 +113,28 @@ def validation_score(model, device, dataloader, criterion):
     """
     loss = 0
     accuracy = 0
-    dataloader = iter(dataloader)
     N = len(dataloader)
     
     model.eval()
     with torch.no_grad():
-        for x, y in dataloader:
+        for x, y in iter(dataloader):
             x, y = x.to(device), y.to(device)
             y_hat = model.forward(x)
             loss += criterion(y_hat, y).item()
             probs = torch.exp(y_hat)
             accuracy += (y.data == probs.max(dim=1)[1]).type(torch.FloatTensor).mean()    
-    return float(loss) / N, accuracy / N
+    return accuracy / N,  loss / N
 
 def accuracy_score(model, device, dataloader):
     """
     Return model accuracy on specified data set.
     """
     accuracy = 0
-    dataloader = iter(dataloader)
     N = len(dataloader)
     
     model.eval()
     with torch.no_grad():
-        for x, y in dataloader:
+        for x, y in iter(dataloader):
             x, y = x.to(device), y.to(device)
             y_hat = model.forward(x)
             probs = torch.exp(y_hat)
@@ -210,10 +204,10 @@ class ProgressTracker(object):
         n = len(self.acc_)
         if n % self.report_every_n_ == 0:
             self.num_iter_ = self.num_iter_ + n
-            valid_loss, valid_acc = validation_score(self.model_, 
-                                                     self.device_, 
-                                                     iter(self.dataloader_), 
-                                                     self.criterion_)
+            valid_acc, valid_loss = accuracy_loss_score(self.model_, 
+                                                        self.device_, 
+                                                        self.dataloader_, 
+                                                        self.criterion_)
             self.perf_report_.append((self.num_iter_, np.mean(self.acc_), valid_loss, valid_acc))
             self.acc_ = []
             print("epoch: {} n_iter: {}.. ".format(self.epoch_, self.num_iter_),

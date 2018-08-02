@@ -6,25 +6,8 @@ import torch
 import numpy as np
 
 from image_api import make_image, get_crop_size
-from model_api import make_model_from_checkpoint
-
-def predict(image_path, model, topk=5):
-    """
-        Predict the class (or classes) of an image using a trained deep learning model.        
-        Return pair (topk-probability, topk-category)
-    """
-    model.eval()
-    with torch.no_grad():
-        crop_width, crop_height = get_crop_size()
-        image = torch.tensor(make_image(image_path))
-        image = image.reshape((1, 3, crop_width, crop_height))
-        image = image.to(model.device)
-        y_hat = model.forward(image)
-        estimate = torch.exp(y_hat)
-    estimate = estimate.to('cpu').numpy()
-    index = np.argsort(estimate, axis=1)[0][-topk:][::-1]
-    probs = estimate[0][index]
-    return probs, [model.mapper.class_by_index(x) for x in index]
+from model_api import make_model_from_checkpoint, make_device
+from data_api import Checkpoint
 
 def main():
     """
@@ -74,14 +57,14 @@ def main():
     
     model_source.add_argument('--checkpoint',
                              dest='checkpoint_path', 
-                             type=arg_as_filetype,
-                             required=True, 
+                             type=arg_as_filepath,
+                             required=False, 
                              help='path to a file with model checkpoint')
 
     model_source.add_argument('--checkpoint-ref',
                              dest='checkpoint_ref_path', 
-                             type=arg_as_filetype,
-                             required=True, 
+                             type=arg_as_filepath,
+                             required=False, 
                              help='path to a file with reference to model checkpoint')
 
     args_parser.add_argument('--topk', 
@@ -102,17 +85,44 @@ def main():
                              help='path to a file with class-to-label dictionary, json')
 
     args = args_parser.parse_args()
+    make_prediction(args)
+    return 0
 
-    model = make_model_from_checkpoint(args.path_checkpoint, args.class_to_name, args.use_gpu)    
-    probs, classes = predict(args.image_path, model, args.topk)
+def make_prediction(args):
+    """
+    """
+    checkpoint = Checkpoint.read(args.checkpoint_path)
+    model = make_model_from_checkpoint(checkpoint)
+    device = make_device(args.use_gpu)
+    model.to(device)    
+
+    index_to_class = {index: klass for klass, index in checkpoint['class_to_index'].items()}
+    probs, classes = predict(args.image_path, model, device, index_to_class, args.topk)
 
     print("Predicted class(es) for {}".format(args.image_path))
     for i, (p, k) in enumerate(zip(probs, classes)):
-        print("{: 2}. class={: 3} prob={:.04f} label={}".format(i, 
-                                                               k,
-                                                               p
-                                                               model.mapper.label_by_class(k))) 
-    return 0
+        print("{}. class={} prob={:.04f} label={}".format(i+1, 
+                                                          k,
+                                                          p,
+                                                          args.class_to_name[k])) 
+
+def predict(image_path, model, device, index_to_class, topk=5):
+    """
+        Predict the class (or classes) of an image using a trained deep learning model.        
+        Return pair (topk-probability, topk-category)
+    """
+    model.eval()
+    with torch.no_grad():
+        crop_width, crop_height = get_crop_size()
+        image = torch.tensor(make_image(image_path))
+        image = image.reshape((1, 3, crop_width, crop_height))
+        image = image.to(device)
+        y_hat = model.forward(image)
+        estimate = torch.exp(y_hat)
+    estimate = estimate.to('cpu').numpy()
+    index = np.argsort(estimate, axis=1)[0][-topk:][::-1]
+    probs = estimate[0][index]
+    return probs, [index_to_class[x] for x in index]
 
 if __name__ == '__main__':
     exit(main())
