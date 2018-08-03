@@ -1,132 +1,11 @@
 import argparse
 import os
 
-import torch
-import numpy as np
-
-import model_api
+from model_api import NeuralNetClassifier
 import data_api
 
-_REPORT_EVERY_N_ITER = 30
-
-def train_with_variable_learning_rate(args):
-    """
-    """
-    train_nn(data_path=args.data_path, 
-             checkpoint_dir=args.checkpoint_path, 
-             arch_name=args.arch_name,
-             hidden_layers=args.hidden_layers, 
-             output_size=args.output_size, 
-             dropout=args.dropout,
-             epochs=args.epochs_per_cycle * args.num_cycles,
-             epochs_per_cycle=args.epochs_per_cycle,
-             learning_rate='cosine',
-             learning_rate_init=args.max_learning_rate,
-             dump_koeff=args.dump_koeff,
-             batch_size=args.batch_size,
-             use_gpu=args.use_gpu)
-
-
-def train_with_const_learning_rate(args):
-    """
-    """
-    train_nn(data_path=args.data_path, 
-             checkpoint_dir=args.checkpoint_path, 
-             arch_name=args.arch_name,
-             hidden_layers=args.hidden_layers, 
-             output_size=args.output_size, 
-             dropout=args.dropout,
-             epochs=args.epochs,
-             epochs_per_cycle=1,
-             learning_rate='constant',
-             learning_rate_init=args.learning_rate,
-             batch_size=args.batch_size,
-             use_gpu=args.use_gpu)
-
-def train_nn(data_path, checkpoint_dir, arch_name, hidden_layers, output_size, dropout,
-              epochs, learning_rate='cosine', learning_rate_init=0.02, dump_koeff=1.0, 
-              batch_size=96, epochs_per_cycle=1, momentum=0.8, use_gpu=True):
-    """
-    """
-    datasource = data_api.make_dataloaders(data_path, batch_size)
-    device = model_api.make_device(use_gpu)
-    model = model_api.make_model(model_api.pretrained_model_factory(arch_name),
-                                 output_size,
-                                 hidden_layers,
-                                 dropout)                       
-    model.to(device)
-    
-    criterion = torch.nn.NLLLoss()
-    optimizer = torch.optim.SGD(model.classifier.parameters(), 
-                                lr=learning_rate_init, 
-                                momentum=momentum)
-    if learning_rate == 'cosine':
-        num_batches = len(datasource.train)
-        cycle_period = epochs_per_cycle * num_batches   
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cycle_period)
-        print("samples={} iter-per-epoch={} iter-per-cycle={}".format(num_batches*batch_size, 
-                                                                      num_batches, 
-                                                                      cycle_period))
-    else:
-        lr_scheduler = None
-
-    progress_tracker = model_api.ProgressTracker(model, 
-                                                 device, 
-                                                 datasource.validation, 
-                                                 criterion, 
-                                                 lr_scheduler=lr_scheduler, 
-                                                 learning_rate_init=learning_rate_init,
-                                                 report_every_n=_REPORT_EVERY_N_ITER)
-    best_score = 0.
-    best_model_ref = None
-    learning_rate_value = learning_rate_init
-    checkpoint = data_api.make_checkpoint_store(checkpoint_dir)
-   
-    for epoch_no in range(1, epochs + 1):
-        progress_tracker.epoch = epoch_no
-        train_loss = model_api.train(model, 
-                                     device, 
-                                     datasource.train, 
-                                     criterion, 
-                                     optimizer, 
-                                     progress_tracker)
-        # Make checkpoint at the end of a cycle.
-        if epoch_no % epochs_per_cycle == 0:
-            filename = "checkpoint_epoch_{}.pth".format(epoch_no)
-            checkpoint.store(filename, 
-                             model, 
-                             classifier = {"architecture": arch_name,
-                                          "output-size": output_size,
-                                          "hidden-layers": hidden_layers,
-                                          "dropout": dropout},
-                             epoch=epoch_no, 
-                             report=progress_tracker.performance_report,
-                             class_to_index=datasource.class_to_index)
-
-            valid_acc = model_api.accuracy_score(model, 
-                                                 device, 
-                                                 datasource.validation)
-            if valid_acc > best_score:
-                best_score = valid_acc
-                best_model_ref = filename
-               
-            if lr_scheduler is not None: 
-                learning_rate_value = learning_rate_value * dump_koeff
-                optimizer = torch.optim.SGD(model.classifier.parameters(), 
-                                            lr=learning_rate_value, 
-                                            momentum=momentum)
-                lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cycle_period)
-                progress_tracker.lr_scheduler = lr_scheduler
-
-    # Persist reference to best model's checkpoint
-    checkpoint.store_reference("best_model.pth", 
-                                best_score, 
-                                best_model_ref)
-    return model, progress_tracker.performance_report
-
 def main():
-    """
-        Application's main function.
+    """ Application's main function.
     """
     class Range(object):
         def __init__(self, lower, upper):
@@ -270,6 +149,62 @@ def main():
     args.func(args)
 
     return 0
+
+def train_with_variable_learning_rate(args):
+    """
+    """
+    nn_clf = NeuralNetClassifier(arch=args.arch_name,
+                                hidden_layers=args.hidden_layers, 
+                                output_size=args.output_size, 
+                                dropout=args.dropout,
+                                use_gpu=args.use_gpu)
+
+    score, model_path, model_ref = nn_clf.fit(data_path=args.data_path,
+                                     learning_rate_policy='cosine',
+                                     learning_rate_init=args.max_learning_rate,
+                                     num_cycles=args.num_cycles,
+                                     epochs_per_cycle=args.epochs_per_cycle,
+                                     dump_koeff=args.dump_koeff,
+                                     batch_size=args.batch_size,
+                                     checkpoint_dir=args.checkpoint_path)
+    report_results(score, model_path, model_ref)
+
+def train_with_const_learning_rate(args):
+    """
+    """
+    nn_clf = NeuralNetClassifier(arch=args.arch_name,
+                                hidden_layers=args.hidden_layers, 
+                                output_size=args.output_size, 
+                                dropout=args.dropout,
+                                use_gpu=args.use_gpu)
+
+    score, model_path, model_ref = nn_clf.fit(data_path=args.data_path,
+                                       learning_rate_policy='constant',
+                                       learning_rate_init=args.learning_rate,
+                                       num_cycles=args.epochs,
+                                       epochs_per_cycle=1,
+                                       batch_size=args.batch_size,
+                                       checkpoint_dir=args.checkpoint_path)
+    report_result(score, model_path, model_ref)
+
+def report_result(score, model_path, model_ref):
+    """ Print model's training results.
+    """
+    print("Model path: {}".format(model_path))
+    print("Model ref: {}".format(model_ref))
+    print("Model accuracy, validation: {:0.3f}".format(score))
+
+    acc = model_accuracy(model_path, args.data_path, args.use_gpu)
+    print("Model accuracy, test: {:0.3f}".format(acc)
+
+def model_accuracy(model_path, data_path, use_gpu):
+    """ Compute model's accuracy on test data set.
+    """
+    checkpoint = data_api.load_model_descriptor(model_path)
+    clf = NeuralNetClassifier(checkpoint=checkpoint,
+                              use_gpu=use_gpu)
+    acc = clf.accuracy(data_path)
+    return acc
 
 if __name__ == '__main__':
     exit(main())
