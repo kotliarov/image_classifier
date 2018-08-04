@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torchvision as tv
 
+import data_api
+from image_api import make_image
 
 class NeuralNetClassifier(object):
     
@@ -32,7 +34,7 @@ class NeuralNetClassifier(object):
         self.class_to_name = class_to_name if class_to_name is not None else {}
             
     
-    def fit(self, data_path, momentum=0.8, batch_size=96,
+    def fit(self, data_path, momentum=0., batch_size=96,
                 learning_rate_policy='constant', learning_rate_init=0.02,
                 epochs_per_cycle=1, num_cycles=10, report_every_n=30):
         """ Fit model to trainig data set.
@@ -40,7 +42,7 @@ class NeuralNetClassifier(object):
             Parameters:
             ----------
             data_path: path to a directory with training and validation data.
-            momentum: koeff to decrease weights fluctuation.
+            momentum: momentum factor for optimizer / koeff to decrease weights fluctuation.
             batch_size: number of samples to include into a training data batch.
             learning_rate_policy: 'constant' or 'cosine'
                                   'constant': learning rate value does not change
@@ -89,15 +91,15 @@ class NeuralNetClassifier(object):
             train_loss = self._train()
             if epoch_no % epochs_per_cycle == 0:
                 filename = "checkpoint_epoch_{}.pth".format(epoch_no)
-                checkpoint.store(filename, 
-                                 self.model, 
-                                 classifier = {"architecture": arch_name,
+                checkpoint.save(filename, 
+                                self.model, 
+                                classifier = {"architecture": arch_name,
                                               "output-size": output_size,
                                               "hidden-layers": hidden_layers,
                                               "dropout": dropout},
-                                 epoch=epoch_no, 
-                                 report=self.perf_report,
-                                 class_to_index=datasource.class_to_index)
+                                epoch=epoch_no, 
+                                report=self.perf_report,
+                                class_to_index=datasource.class_to_index)
 
                 valid_acc = accuracy_score(self.model, 
                                            self.device, 
@@ -114,9 +116,9 @@ class NeuralNetClassifier(object):
                     self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, iter_per_cycle)
 
         # Persist reference to best model's checkpoint
-        checkpoint.store_reference("best_model.pth", 
-                                    best_score, 
-                                    best_model_ref)
+        checkpoint.save_reference("best_model.pth", 
+                                   best_score, 
+                                   best_model_ref)
         return best_score, best_model_ref, 'best_model.pth' 
 
     def accuracy(self, data_path):
@@ -156,11 +158,11 @@ class NeuralNetClassifier(object):
             image_path: path to image file.
             top_k:      defines size of collection with predictions. 
         """
-        crop_width, crop_height = get_crop_size()
         self.model.eval()
         with torch.no_grad():
             image = torch.tensor(make_image(image_path))
-            image = image.reshape((1, 3, crop_width, crop_height))
+            channels, width, height = image.shape
+            image = image.reshape((1, channels, width, height))
             image = image.to(device)
             y_hat = self.model.forward(image)
             estimate = torch.exp(y_hat)
@@ -194,7 +196,6 @@ class NeuralNetClassifier(object):
         - Advance learning rate scheduler
         - Record performance metrics (train-loss, validation-loss, validation-accuracy).
         """
-        # Adjust learning rate
         if self.lr_scheduler is not None:
             lr_rate = self.lr_scheduler.get_lr()[0]
             self.lr_scheduler.step()
@@ -205,10 +206,7 @@ class NeuralNetClassifier(object):
         n = len(self.accum)
         if n % self.report_every_n == 0:
             self.num_iter = self.num_iter + n
-            valid_acc, valid_loss = accuracy_loss_score(self.model, 
-                                                        self.device, 
-                                                        self.datasource.valid, 
-                                                        self.criterion)
+            valid_acc, valid_loss = self._accuracy_loss_score(self.datasource.valid) 
             self.perf_report.append((self.num_iter, np.mean(self.accum), valid_loss, valid_acc))
             self.accum = []
             print("epoch: {} n_iter: {}.. ".format(self.epoch, self.num_iter),
@@ -216,6 +214,28 @@ class NeuralNetClassifier(object):
                   "Training Loss: {:.3f}.. ".format(self.perf_report[-1][1]),
                   "Valid Loss: {:.3f}.. ".format(self.perf_report[-1][2]),
                   "Valid Accuracy: {:.3f}".format(self.perf_report[-1][3]))
+
+    def _accuracy_loss_score(selfmodel, device, dataloader, criterion):
+        """ Return pair (accuracy, loss) per data set.
+            Loss and accuracy are averaged over the dataset batches.
+            
+            Parameters:
+            ----------
+            dataloader ::= data set loader.
+        """
+        loss = 0
+        accuracy = 0
+        N = len(dataloader)
+        
+        model.eval()
+        with torch.no_grad():
+            for x, y in iter(dataloader):
+                x, y = x.to(device), y.to(device)
+                y_hat = self.model.forward(x)
+                loss += self.criterion(y_hat, y).item()
+                probs = torch.exp(y_hat)
+                accuracy += (y.data == probs.max(dim=1)[1]).type(torch.FloatTensor).mean()    
+        return accuracy / N,  loss / N
 
 def make_model_from_checkpoint(checkpoint):
     """ Return trained model from checkpoint.
@@ -290,27 +310,4 @@ def pretrained_model_factory(arch):
     }
     return  models[arch]
 
-def accuracy_loss_score(model, device, dataloader, criterion):
-    """
-    Return pair (accuracy, loss) per data set.
-    Loss and accuracy are averaged over the dataset batches.
-    
-        model      ::= network model
-        device     ::= gpu or cpu device
-        dataloader ::= test data source
-        criterion  ::= cost function
-    """
-    loss = 0
-    accuracy = 0
-    N = len(dataloader)
-    
-    model.eval()
-    with torch.no_grad():
-        for x, y in iter(dataloader):
-            x, y = x.to(device), y.to(device)
-            y_hat = model.forward(x)
-            loss += criterion(y_hat, y).item()
-            probs = torch.exp(y_hat)
-            accuracy += (y.data == probs.max(dim=1)[1]).type(torch.FloatTensor).mean()    
-    return accuracy / N,  loss / N
 

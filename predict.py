@@ -2,12 +2,8 @@ import argparse
 import os
 import json
 
-import torch
-import numpy as np
-
-from image_api import make_image, get_crop_size
-from model_api import make_model_from_checkpoint, make_device
-from data_api import Checkpoint
+from model_api import NeuralNetClassifier
+from data_api import CheckpointStore
 
 def main():
     """
@@ -45,30 +41,14 @@ def main():
                              required=True, 
                              help='path to an image file')
 
-    # Model source could be
-    # a) model's checkpoint file.
-    # b) reference to a model's checkpoint file, 
-    #    where reference is a checkpoint file that contains following object:
-    #    { 
-    #       checkpoint': <path-to-model-checkpoint>, 
-    #       score: <model-score> 
-    #    }
-    model_source = args_parser.add_mutually_exclusive_group()
-    
-    model_source.add_argument('--checkpoint',
+    args_source.add_argument('--checkpoint',
                              dest='checkpoint_path', 
                              type=arg_as_filepath,
                              required=False, 
-                             help='path to a file with model checkpoint')
+                             help='path to a file with model\'s checkpoint, or reference to a model')
 
-    model_source.add_argument('--checkpoint-ref',
-                             dest='checkpoint_ref_path', 
-                             type=arg_as_filepath,
-                             required=False, 
-                             help='path to a file with reference to model checkpoint')
-
-    args_parser.add_argument('--topk', 
-                                dest='topk', 
+    args_parser.add_argument('--top-k', 
+                                dest='top_k', 
                                 type=int, 
                                 default=5, 
                                 help='top k most likely classes to return')
@@ -82,6 +62,7 @@ def main():
     args_parser.add_argument('--class-names',
                              dest='class_to_name',
                              type=arg_as_json,
+                             default={},
                              help='path to a file with class-to-label dictionary, json')
 
     args = args_parser.parse_args()
@@ -91,38 +72,19 @@ def main():
 def make_prediction(args):
     """
     """
-    checkpoint = Checkpoint.read(args.checkpoint_path)
-    model = make_model_from_checkpoint(checkpoint)
-    device = make_device(args.use_gpu)
-    model.to(device)    
+    checkpoint = CheckpointStore.read(args.checkpoint_path)
+    if 'reference' == checkpoint['tag']:
+        checkpoint = CheckpointStore.read(checkpoint['model'])
 
-    index_to_class = {index: klass for klass, index in checkpoint['class_to_index'].items()}
-    probs, classes = predict(args.image_path, model, device, index_to_class, args.topk)
+    clf = NeuralNetModel(checkpoint=checkpoint, use_gpu=args.use_gpu)
+    probs, classes = clf.predict(args.image_path, args.top_k)
 
     print("Predicted class(es) for {}".format(args.image_path))
     for i, (p, k) in enumerate(zip(probs, classes)):
         print("{}. class={} prob={:.04f} label={}".format(i+1, 
                                                           k,
                                                           p,
-                                                          args.class_to_name[k])) 
-
-def predict(image_path, model, device, index_to_class, topk=5):
-    """
-        Predict the class (or classes) of an image using a trained deep learning model.        
-        Return pair (topk-probability, topk-category)
-    """
-    model.eval()
-    with torch.no_grad():
-        crop_width, crop_height = get_crop_size()
-        image = torch.tensor(make_image(image_path))
-        image = image.reshape((1, 3, crop_width, crop_height))
-        image = image.to(device)
-        y_hat = model.forward(image)
-        estimate = torch.exp(y_hat)
-    estimate = estimate.to('cpu').numpy()
-    index = np.argsort(estimate, axis=1)[0][-topk:][::-1]
-    probs = estimate[0][index]
-    return probs, [index_to_class[x] for x in index]
+                                                          args.class_to_name[k] if args.class_to_name else '-')) 
 
 if __name__ == '__main__':
     exit(main())

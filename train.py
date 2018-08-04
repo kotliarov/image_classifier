@@ -2,7 +2,7 @@ import argparse
 import os
 
 from model_api import NeuralNetClassifier
-import data_api
+from data_api import CheckpointStore
 
 def main():
     """ Application's main function.
@@ -71,10 +71,6 @@ def main():
                              action='store_true', 
                              default=False,
                              help='use GPU if available')
-    args_parser.add_argument('--class-names',
-                             dest='class_to_name',
-                             type=arg_as_json,
-                             help='path to a file with class-to-label dictionary, json')
 
     model = args_parser.add_argument_group('model')
     model.add_argument('--arch-name',
@@ -103,6 +99,12 @@ def main():
                        type=int,
                        default=96,
                        help='training sample batch size')
+    model.add_argument('--momentum',
+                       dest='momemtum',
+                       type=float,
+                       default=0.,
+                       choices=[Range(0., 1.)],
+                       help='momentum factor for optimizer function')
 
     sp = parser.add_subparsers()
     const_learn_rate = sp.add_parser('const-learn-rate', parents=[args_parser], help='Train NN with constant learning rate over epochs')
@@ -144,47 +146,46 @@ def main():
     var_learn_rate.set_defaults(func=train_with_variable_learning_rate)
  
     args = parser.parse_args()
-
-    print(args)
     args.func(args)
-
     return 0
 
 def train_with_variable_learning_rate(args):
-    """
+    """ Train model with cosine annealing learning rate policy.
     """
     nn_clf = NeuralNetClassifier(arch=args.arch_name,
-                                hidden_layers=args.hidden_layers, 
-                                output_size=args.output_size, 
-                                dropout=args.dropout,
-                                use_gpu=args.use_gpu)
+                                 hidden_layers=args.hidden_layers, 
+                                 output_size=args.output_size, 
+                                 dropout=args.dropout,
+                                 use_gpu=args.use_gpu)
 
     score, model_path, model_ref = nn_clf.fit(data_path=args.data_path,
-                                     learning_rate_policy='cosine',
-                                     learning_rate_init=args.max_learning_rate,
-                                     num_cycles=args.num_cycles,
-                                     epochs_per_cycle=args.epochs_per_cycle,
-                                     dump_koeff=args.dump_koeff,
-                                     batch_size=args.batch_size,
-                                     checkpoint_dir=args.checkpoint_path)
+                                              learning_rate_policy='cosine',
+                                              learning_rate_init=args.max_learning_rate,
+                                              num_cycles=args.num_cycles,
+                                              epochs_per_cycle=args.epochs_per_cycle,
+                                              dump_koeff=args.dump_koeff,
+                                              batch_size=args.batch_size,
+                                              momentum=args.momentum,
+                                              checkpoint_dir=args.checkpoint_path)
     report_results(score, model_path, model_ref)
 
 def train_with_const_learning_rate(args):
-    """
+    """ Train model with constant learning rate.
     """
     nn_clf = NeuralNetClassifier(arch=args.arch_name,
-                                hidden_layers=args.hidden_layers, 
-                                output_size=args.output_size, 
-                                dropout=args.dropout,
-                                use_gpu=args.use_gpu)
+                                 hidden_layers=args.hidden_layers, 
+                                 output_size=args.output_size, 
+                                 dropout=args.dropout,
+                                 use_gpu=args.use_gpu)
 
     score, model_path, model_ref = nn_clf.fit(data_path=args.data_path,
-                                       learning_rate_policy='constant',
-                                       learning_rate_init=args.learning_rate,
-                                       num_cycles=args.epochs,
-                                       epochs_per_cycle=1,
-                                       batch_size=args.batch_size,
-                                       checkpoint_dir=args.checkpoint_path)
+                                              learning_rate_policy='constant',
+                                              learning_rate_init=args.learning_rate,
+                                              num_cycles=args.epochs,
+                                              epochs_per_cycle=1,
+                                              batch_size=args.batch_size,
+                                              momentum=args.momentum,
+                                              checkpoint_dir=args.checkpoint_path)
     report_result(score, model_path, model_ref)
 
 def report_result(score, model_path, model_ref):
@@ -200,7 +201,7 @@ def report_result(score, model_path, model_ref):
 def model_accuracy(model_path, data_path, use_gpu):
     """ Compute model's accuracy on test data set.
     """
-    checkpoint = data_api.load_model_descriptor(model_path)
+    checkpoint = CheckpointStore.read(model_path)
     clf = NeuralNetClassifier(checkpoint=checkpoint,
                               use_gpu=use_gpu)
     acc = clf.accuracy(data_path)
