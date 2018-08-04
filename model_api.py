@@ -158,7 +158,7 @@ class NeuralNetClassifier(object):
                 accuracy += (y.data == probs.max(dim=1)[1]).type(torch.FloatTensor).mean()
         return accuracy / N      
 
-    def predict(image_path, top_k=5):
+    def predict(self, image_path, top_k=5):
         """ Predict class of an image.
 
             Return:

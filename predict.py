@@ -41,7 +41,7 @@ def main():
                              required=True, 
                              help='path to an image file')
 
-    args_source.add_argument('--checkpoint',
+    args_parser.add_argument('--checkpoint',
                              dest='checkpoint_path', 
                              type=arg_as_filepath,
                              required=False, 
@@ -76,7 +76,7 @@ def make_prediction(args):
     if 'reference' == checkpoint['tag']:
         checkpoint = CheckpointStore.read(checkpoint['model'])
 
-    clf = NeuralNetModel(checkpoint=checkpoint, use_gpu=args.use_gpu)
+    clf = NeuralNetClassifier(checkpoint=checkpoint, use_gpu=args.use_gpu)
     probs, classes = clf.predict(args.image_path, args.top_k)
 
     print("Predicted class(es) for {}".format(args.image_path))
