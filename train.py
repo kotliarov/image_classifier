@@ -1,8 +1,8 @@
 import argparse
 import os
 
-from model_api import NeuralNetClassifier
-from data_api import CheckpointStore
+from model_api import NeuralNetClassifier, pretrained_model_factory
+from data_api import CheckpointStore, make_dataloaders
 
 def main():
     """ Application's main function.
@@ -20,7 +20,7 @@ def main():
         """ Verify that specified name is a name of pre-trained model.
         """
         try:
-            model_api.pretrained_model_factory(arch)
+            pretrained_model_factory(arch)
         except KeyError:
             raise argparse.ArgumentTypeError('Unknown architecture: {}'.format(arch))
         return arch
@@ -100,7 +100,7 @@ def main():
                        default=96,
                        help='training sample batch size')
     model.add_argument('--momentum',
-                       dest='momemtum',
+                       dest='momentum',
                        type=float,
                        default=0.,
                        choices=[Range(0., 1.)],
@@ -109,7 +109,7 @@ def main():
     sp = parser.add_subparsers()
     const_learn_rate = sp.add_parser('const-learn-rate', parents=[args_parser], help='Train NN with constant learning rate over epochs')
     const_learn_rate.add_argument('--learning-rate',
-                            dest='learn_rate',
+                            dest='learning_rate',
                             type=float,
                             required=True,
                             help='learning rate')
@@ -158,7 +158,7 @@ def train_with_variable_learning_rate(args):
                                  dropout=args.dropout,
                                  use_gpu=args.use_gpu)
 
-    score, model_path, model_ref = nn_clf.fit(data_path=args.data_path,
+    model_ref = nn_clf.fit(data_path=args.data_path,
                                               learning_rate_policy='cosine',
                                               learning_rate_init=args.max_learning_rate,
                                               num_cycles=args.num_cycles,
@@ -166,8 +166,8 @@ def train_with_variable_learning_rate(args):
                                               dump_koeff=args.dump_koeff,
                                               batch_size=args.batch_size,
                                               momentum=args.momentum,
-                                              checkpoint_dir=args.checkpoint_path)
-    report_results(score, model_path, model_ref)
+                                              checkpoint_path=args.checkpoint_path)
+    report_result(model_ref, args.data_path, args.use_gpu)
 
 def train_with_const_learning_rate(args):
     """ Train model with constant learning rate.
@@ -178,25 +178,32 @@ def train_with_const_learning_rate(args):
                                  dropout=args.dropout,
                                  use_gpu=args.use_gpu)
 
-    score, model_path, model_ref = nn_clf.fit(data_path=args.data_path,
+    model_ref = nn_clf.fit(data_path=args.data_path,
                                               learning_rate_policy='constant',
                                               learning_rate_init=args.learning_rate,
                                               num_cycles=args.epochs,
                                               epochs_per_cycle=1,
                                               batch_size=args.batch_size,
                                               momentum=args.momentum,
-                                              checkpoint_dir=args.checkpoint_path)
-    report_result(score, model_path, model_ref)
+                                              checkpoint_path=args.checkpoint_path)
+    report_result(model_ref, args.data_path, args.use_gpu)
 
-def report_result(score, model_path, model_ref):
+def report_result(model_ref, data_path, use_gpu):
     """ Print model's training results.
-    """
-    print("Model path: {}".format(model_path))
-    print("Model ref: {}".format(model_ref))
-    print("Model accuracy, validation: {:0.3f}".format(score))
 
-    acc = model_accuracy(model_path, args.data_path, args.use_gpu)
-    print("Model accuracy, test: {:0.3f}".format(acc)
+	Parameters:
+	----------
+	model_ref: path to a checkpoint file with reference to best model.
+	data_path: path to directory with train/valid/test data.
+	use_gpu: use Gpu if True
+    """
+    ref = CheckpointStore.read(model_ref)
+    print("Model path: {}".format(ref['model']))
+    print("Model ref: {}".format(model_ref))
+    print("Model accuracy, validation: {:0.3f}".format(ref['score']))
+
+    acc = model_accuracy(ref['model'], data_path, use_gpu)
+    print("Model accuracy, test: {:0.3f}".format(acc))
 
 def model_accuracy(model_path, data_path, use_gpu):
     """ Compute model's accuracy on test data set.
@@ -204,7 +211,8 @@ def model_accuracy(model_path, data_path, use_gpu):
     checkpoint = CheckpointStore.read(model_path)
     clf = NeuralNetClassifier(checkpoint=checkpoint,
                               use_gpu=use_gpu)
-    acc = clf.accuracy(data_path)
+    datasource = make_dataloaders(data_path)
+    acc = clf.accuracy(datasource.test)
     return acc
 
 if __name__ == '__main__':

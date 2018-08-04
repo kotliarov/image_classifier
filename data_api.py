@@ -14,7 +14,7 @@ def make_dataloaders(data_path, batch_size=64):
 def make_checkpoint_store(checkpoint_dir):
     """Return instance of Checkpoint class.
     """
-    return Checkpoint(checkpoint_dir)
+    return CheckpointStore(checkpoint_dir)
 
 class ImageDataSource(object):
     def __init__(self, path, batch_size):
@@ -29,13 +29,16 @@ class ImageDataSource(object):
                                                  batch_size=32, 
                                                  shuffle=False)
 
-    @property train(self):
+    @property 
+    def train(self):
         return self.train_
 
-    @property valid(self):
+    @property 
+    def valid(self):
         return self.valid_
 
-    @property test(self):
+    @property 
+    def test(self):
         return self.test_
 
     @property
@@ -92,7 +95,10 @@ class CheckpointStore(object):
             'class_to_index': class_to_index,
             'perf_report': report
         }
-        torch.save(checkpoint, os.path.join(self.root, filename))
+        path = os.path.join(self.root, filename)
+        torch.save(checkpoint, path)
+        return path
+
 
     def save_reference(self, filename, score, checkpoint_filename):
         """ Store a reference to
@@ -103,7 +109,9 @@ class CheckpointStore(object):
             'score': score,
             'model': os.path.join(self.root, checkpoint_filename)
         }
-        torch.save(ref, os.path.join(self.root, filename))
+        path = os.path.join(self.root, filename)
+        torch.save(ref, path)
+        return path
 
     @staticmethod
     def read(filepath):

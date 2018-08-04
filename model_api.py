@@ -27,21 +27,33 @@ class NeuralNetClassifier(object):
         if checkpoint is not None:
             self.model = make_model_from_checkpoint(checkpoint)
             self.index_to_class = {index: klass for klass, index in checkpoint['class_to_index'].items()}
+            classifier = checkpoint['classifier']
+            self.arch_name = classifier['architecture']
+            self.hidden_layers = classifier['hidden-layers']
+            self.output_size = classifier['output-size']
+            self.dropout = classifier['dropout']
         else:
             self.model = make_model(pretrained_model_factory(arch),
                                     output_size, hidden_layers, dropout)
+            self.arch_name = arch
+            self.hidden_layers = hidden_layers
+            self.output_size = output_size
+            self.dropout = dropout
+
         self.model.to(self.device)
         self.class_to_name = class_to_name if class_to_name is not None else {}
             
     
-    def fit(self, data_path, momentum=0., batch_size=96,
-                learning_rate_policy='constant', learning_rate_init=0.02,
+    def fit(self, data_path, checkpoint_path,
+                momentum=0., batch_size=96,
+                learning_rate_policy='constant', learning_rate_init=0.02, dump_koeff=1.0,
                 epochs_per_cycle=1, num_cycles=10, report_every_n=30):
         """ Fit model to trainig data set.
 
             Parameters:
             ----------
             data_path: path to a directory with training and validation data.
+            checkpoint_path: path to a directory to store checkpoints in.
             momentum: momentum factor for optimizer / koeff to decrease weights fluctuation.
             batch_size: number of samples to include into a training data batch.
             learning_rate_policy: 'constant' or 'cosine'
@@ -51,6 +63,9 @@ class NeuralNetClassifier(object):
                                              per cosine annealing schedule.
             learning_rate_init: learning rate value. 
                                 Maximum learning rate for cosine annealing schedule.
+
+	    dump_koeff: learning rate dumping koefficient.
+
             epochs_per_cycle:
                             - set to 1 for 'constant' learning rate policy.
                             - defines number of epochs per cosine annealing schedule cycle.
@@ -63,6 +78,7 @@ class NeuralNetClassifier(object):
         """
         self.learning_rate_init = learning_rate_init
         self.num_iter = 0
+        self.report_every_n = report_every_n
         self.accum = []
         self.perf_report = []
 
@@ -84,7 +100,7 @@ class NeuralNetClassifier(object):
         best_score = 0.
         best_model_ref = None
         learning_rate_value = learning_rate_init
-        checkpoint = data_api.make_checkpoint_store(checkpoint_dir)
+        checkpoint = data_api.make_checkpoint_store(checkpoint_path)
        
         for epoch_no in range(1, epochs + 1):
             self.epoch = epoch_no
@@ -93,17 +109,15 @@ class NeuralNetClassifier(object):
                 filename = "checkpoint_epoch_{}.pth".format(epoch_no)
                 checkpoint.save(filename, 
                                 self.model, 
-                                classifier = {"architecture": arch_name,
-                                              "output-size": output_size,
-                                              "hidden-layers": hidden_layers,
-                                              "dropout": dropout},
+                                classifier = {"architecture": self.arch_name,
+                                              "output-size": self.output_size,
+                                              "hidden-layers": self.hidden_layers,
+                                              "dropout": self.dropout},
                                 epoch=epoch_no, 
                                 report=self.perf_report,
-                                class_to_index=datasource.class_to_index)
+                                class_to_index=self.datasource.class_to_index)
 
-                valid_acc = accuracy_score(self.model, 
-                                           self.device, 
-                                           self.datasource.valid)
+                valid_acc = self.accuracy(self.datasource.valid)
                 if valid_acc > best_score:
                     best_score = valid_acc
                     best_model_ref = filename
@@ -116,12 +130,12 @@ class NeuralNetClassifier(object):
                     self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, iter_per_cycle)
 
         # Persist reference to best model's checkpoint
-        checkpoint.save_reference("best_model.pth", 
-                                   best_score, 
-                                   best_model_ref)
-        return best_score, best_model_ref, 'best_model.pth' 
+        path = checkpoint.save_reference("best_model.pth", 
+                                         best_score, 
+                                         best_model_ref)
+        return path  
 
-    def accuracy(self, data_path):
+    def accuracy(self, dataloader):
         """ Compute model's accuracy on test data set.
 
             Return:
@@ -130,16 +144,15 @@ class NeuralNetClassifier(object):
 
             Parameters:
             ----------
-            data_path: path to a directory with test data.
+            dataloader: dataloader instance
         """
-        dataloader = data_api.make_dataloaders(data_path).test
         accuracy = 0
         N = len(dataloader)
         
         self.model.eval()
         with torch.no_grad():
             for x, y in iter(dataloader):
-                x, y = x.to(device), y.to(device)
+                x, y = x.to(self.device), y.to(self.device)
                 y_hat = self.model.forward(x)
                 probs = torch.exp(y_hat)
                 accuracy += (y.data == probs.max(dim=1)[1]).type(torch.FloatTensor).mean()
@@ -163,7 +176,7 @@ class NeuralNetClassifier(object):
             image = torch.tensor(make_image(image_path))
             channels, width, height = image.shape
             image = image.reshape((1, channels, width, height))
-            image = image.to(device)
+            image = image.to(self.device)
             y_hat = self.model.forward(image)
             estimate = torch.exp(y_hat)
         estimate = estimate.to('cpu').numpy()
@@ -215,7 +228,7 @@ class NeuralNetClassifier(object):
                   "Valid Loss: {:.3f}.. ".format(self.perf_report[-1][2]),
                   "Valid Accuracy: {:.3f}".format(self.perf_report[-1][3]))
 
-    def _accuracy_loss_score(selfmodel, device, dataloader, criterion):
+    def _accuracy_loss_score(self, dataloader):
         """ Return pair (accuracy, loss) per data set.
             Loss and accuracy are averaged over the dataset batches.
             
@@ -227,10 +240,10 @@ class NeuralNetClassifier(object):
         accuracy = 0
         N = len(dataloader)
         
-        model.eval()
+        self.model.eval()
         with torch.no_grad():
             for x, y in iter(dataloader):
-                x, y = x.to(device), y.to(device)
+                x, y = x.to(self.device), y.to(self.device)
                 y_hat = self.model.forward(x)
                 loss += self.criterion(y_hat, y).item()
                 probs = torch.exp(y_hat)
