@@ -1,10 +1,10 @@
 #!/bin/bash
 python train.py adjust-learn-rate \
  --data-path=flowers \
- --checkpoint-path=trained-models \
+ --checkpoint-path="$1" \
  --gpu \
  --arch-name=vgg19 \
- --hidden-layers 4096 2048 2048 \
+ --hidden-layers 4096 \
  --output-size=102 \
  --dropout=0.3 \
  --batch-size=96 \
