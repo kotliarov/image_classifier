@@ -1,7 +1,7 @@
 1) Command line application python scripts.
 - train.py.......command line app to train a neural net model.
 - predict.py.....command line app to predict class of an image
-- model_api.py...neuarl net model API
+- model_api.py...neural net model API
 - data_api.py....data loaders and checkpoints API
 - image_api.py...image API
 

@@ -1,4 +1,6 @@
 from collections import OrderedDict
+import copy
+
 import numpy as np
 import torch
 import torchvision as tv
@@ -27,11 +29,10 @@ class NeuralNetClassifier(object):
         if checkpoint is not None:
             self.model = make_model_from_checkpoint(checkpoint)
             self.index_to_class = {index: klass for klass, index in checkpoint['class_to_index'].items()}
-            classifier = checkpoint['classifier']
-            self.arch_name = classifier['architecture']
-            self.hidden_layers = classifier['hidden-layers']
-            self.output_size = classifier['output-size']
-            self.dropout = classifier['dropout']
+            self.arch_name = checkpoint['meta.arch']
+            self.hidden_layers = checkpoint['meta.hidden-layers']
+            self.output_size = checkpoint['meta.output-size']
+            self.dropout = checkpoint['meta.dropout']
         else:
             self.model = make_model(pretrained_model_factory(arch),
                                     output_size, hidden_layers, dropout)
@@ -43,7 +44,6 @@ class NeuralNetClassifier(object):
         self.model.to(self.device)
         self.class_to_name = class_to_name if class_to_name is not None else {}
             
-    
     def fit(self, data_path, checkpoint_path,
                 momentum=0., batch_size=96,
                 learning_rate_policy='constant', learning_rate_init=0.02, dump_koeff=1.0,
@@ -77,9 +77,7 @@ class NeuralNetClassifier(object):
                             - defines number of iterattion between reports on training performance.
         """
         self.learning_rate_init = learning_rate_init
-        self.num_iter = 0
         self.report_every_n = report_every_n
-        self.accum = []
         self.perf_report = []
 
         self.datasource = data_api.make_dataloaders(data_path, batch_size)
@@ -97,42 +95,51 @@ class NeuralNetClassifier(object):
             epochs = num_cycles
             self.lr_scheduler = None
 
-        best_score = 0.
-        best_model_ref = None
+        # Track best classifier.
+        best_score_acc = 0.
+        best_score_loss = float('inf')
+        best_epoch = None
+        best_classifier_state = {}
+
         learning_rate_value = learning_rate_init
         checkpoint = data_api.make_checkpoint_store(checkpoint_path)
-       
-        for epoch_no in range(1, epochs + 1):
-            self.epoch = epoch_no
-            train_loss = self._train()
-            if epoch_no % epochs_per_cycle == 0:
-                filename = "checkpoint_epoch_{}.pth".format(epoch_no)
-                checkpoint.save(filename, 
-                                self.model, 
-                                classifier = {"architecture": self.arch_name,
-                                              "output-size": self.output_size,
-                                              "hidden-layers": self.hidden_layers,
-                                              "dropout": self.dropout},
-                                epoch=epoch_no, 
-                                report=self.perf_report,
-                                class_to_index=self.datasource.class_to_index)
+        save_as = "model.pth"
 
-                valid_acc = self.accuracy(self.datasource.valid)
-                if valid_acc > best_score:
-                    best_score = valid_acc
-                    best_model_ref = filename
-                   
-                if self.lr_scheduler is not None: 
-                    learning_rate_value = learning_rate_value * dump_koeff
-                    self.optimizer = torch.optim.SGD(self.model.classifier.parameters(), 
+        for epoch_no in range(1, epochs + 1):
+            train_loss = self._train()
+            valid_acc, valid_loss = self._accuracy_loss_score(self.datasource.valid) 
+            self.perf_report.append({'train-loss': train_loss,
+                                     'valid-loss': valid_loss,
+                                     'valid-acc': valid_acc})
+            print("Epoch: {} of {}.. ".format(epoch_no, epochs),
+                  "Train Loss: {:.3f}.. ".format(train_loss),
+                  "Valid Loss: {:.3f}.. ".format(valid_loss),
+                  "Valid Accuracy: {:.3f}".format(valid_acc))
+                
+            if valid_acc > best_score_acc and valid_loss < best_score_loss:
+                best_score_acc = valid_acc
+                best_score_loss = valid_loss
+                best_epoch = epoch_no
+                best_classifier_state = copy.deepcopy(self.model.classifier.state_dict())
+               
+            if epoch_no % epochs_per_cycle == 0:
+               if self.lr_scheduler is not None: 
+                  learning_rate_value = learning_rate_value * dump_koeff
+                  self.optimizer = torch.optim.SGD(self.model.classifier.parameters(), 
                                                      lr=learning_rate_value, 
                                                      momentum=momentum)
-                    self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, iter_per_cycle)
-
-        # Persist reference to best model's checkpoint
-        path = checkpoint.save_reference("best_model.pth", 
-                                         best_score, 
-                                         best_model_ref)
+                  self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, iter_per_cycle)
+        # Set best classifier
+        self.model.classifier.load_state_dict(best_classifier_state)
+        path = checkpoint.save("model.pth", 
+                               self.model, 
+                               meta = {"arch": self.arch_name,
+                                       "output-size": self.output_size,
+                                       "hidden-layers": self.hidden_layers,
+                                       "dropout": self.dropout},
+                               epoch=best_epoch, 
+                               report=self.perf_report,
+                               class_to_index=self.datasource.class_to_index)
         return path  
 
     def accuracy(self, dataloader):
@@ -200,33 +207,16 @@ class NeuralNetClassifier(object):
             loss.backward()
             self.optimizer.step()
             train_loss.append(loss.item())
-            self._step(loss.item())
+            self._step()
         return np.mean(train_loss)
 
-    def _step(self, train_loss):
+    def _step(self):
         """ Track progress of the model's fitting.
 
         - Advance learning rate scheduler
-        - Record performance metrics (train-loss, validation-loss, validation-accuracy).
         """
         if self.lr_scheduler is not None:
-            lr_rate = self.lr_scheduler.get_lr()[0]
             self.lr_scheduler.step()
-        else:
-            lr_rate = self.learning_rate_init
-
-        self.accum.append(train_loss)
-        n = len(self.accum)
-        if n % self.report_every_n == 0:
-            self.num_iter = self.num_iter + n
-            valid_acc, valid_loss = self._accuracy_loss_score(self.datasource.valid) 
-            self.perf_report.append((self.num_iter, np.mean(self.accum), valid_loss, valid_acc))
-            self.accum = []
-            print("epoch: {} n_iter: {}.. ".format(self.epoch, self.num_iter),
-                  "Learn-rate: {:.5f}..".format(lr_rate),
-                  "Training Loss: {:.3f}.. ".format(self.perf_report[-1][1]),
-                  "Valid Loss: {:.3f}.. ".format(self.perf_report[-1][2]),
-                  "Valid Accuracy: {:.3f}".format(self.perf_report[-1][3]))
 
     def _accuracy_loss_score(self, dataloader):
         """ Return pair (accuracy, loss) per data set.
@@ -257,13 +247,14 @@ def make_model_from_checkpoint(checkpoint):
 
 	checkpoint ::= dictionary with model state and properties. 
     """
-    classifier = checkpoint['classifier']
-    
-    model = make_model(pretrained_model_factory(classifier["architecture"]),
-                       classifier['output-size'],
-                       classifier['hidden-layers'],
-                       classifier['dropout'])
-    model.classifier.load_state_dict(checkpoint['classifier.state_dict'])
+    if 'model' in checkpoint:
+        model = checkpoint['model']
+    else:
+        model = make_model(pretrained_model_factory(checkpoint["meta.arch"]),
+                           checkpoint['meta.output-size'],
+                           checkpoint['meta.hidden-layers'],
+                           checkpoint['meta.dropout'])
+        model.classifier.load_state_dict(checkpoint['model.classifier.state_dict'])
     return model
 
 def make_model(pretrained_model_factory, output_size, hidden_layers, drop_prob=0.3):
@@ -296,7 +287,13 @@ def make_model(pretrained_model_factory, output_size, hidden_layers, drop_prob=0
     for param in model.parameters():
         param.requires_grad = False
 
-    input_size = model.classifier[0].in_features
+    # vggXX classifier is a Sequential container.
+    # densenetXXX classifier is a single linear layer.
+    try:
+        input_size = model.classifier[0].in_features
+    except TypeError:
+        input_size = model.classifier.in_features
+
     model.classifier = make_classifier_net(input_size, output_size, hidden_layers, drop_prob)
     return model
 

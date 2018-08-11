@@ -1,4 +1,5 @@
 import os
+import copy
 
 import torch
 import torch.utils.data
@@ -60,7 +61,6 @@ class ImageDataSource(object):
         if name == 'train': 
             return tv.transforms.Compose([
                         tv.transforms.RandomRotation(20),
-                        tv.transforms.Resize(256),
                         tv.transforms.RandomResizedCrop(crop_size[0]),
                         tv.transforms.RandomHorizontalFlip(0.5),
                         tv.transforms.ToTensor(),
@@ -86,31 +86,25 @@ class CheckpointStore(object):
     def __init__(self, path):
         self.root = path
     
-    def save(self, filename, model, classifier, epoch, report, class_to_index):
+    def save(self, filename, model, meta, epoch, report, class_to_index):
+        """ Save model and its metadata.
+            For `densenet` models saving/loading state dictionary 
+            does not work: we will not get same model back.
+            Solution is to save complete model.
+        """
         checkpoint = {
             'tag': 'model',
-            'classifier.state_dict': model.classifier.state_dict(),
-            'classifier': classifier,
+            'model': copy.deepcopy(model),
+            'meta.arch': meta['arch'],
+            'meta.output-size': meta['output-size'],
+            'meta.hidden-layers': meta['hidden-layers'],
+            'meta.dropout': meta['dropout'],
             'epoch': epoch,
             'class_to_index': class_to_index,
             'perf_report': report
         }
         path = os.path.join(self.root, filename)
         torch.save(checkpoint, path)
-        return path
-
-
-    def save_reference(self, filename, score, checkpoint_filename):
-        """ Store a reference to
-            a checkpoint file with model.
-        """
-        ref = {
-            'tag': 'reference',
-            'score': score,
-            'model': os.path.join(self.root, checkpoint_filename)
-        }
-        path = os.path.join(self.root, filename)
-        torch.save(ref, path)
         return path
 
     @staticmethod

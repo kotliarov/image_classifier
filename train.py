@@ -158,16 +158,17 @@ def train_with_variable_learning_rate(args):
                                  dropout=args.dropout,
                                  use_gpu=args.use_gpu)
 
-    model_ref = nn_clf.fit(data_path=args.data_path,
-                                              learning_rate_policy='cosine',
-                                              learning_rate_init=args.max_learning_rate,
-                                              num_cycles=args.num_cycles,
-                                              epochs_per_cycle=args.epochs_per_cycle,
-                                              dump_koeff=args.dump_koeff,
-                                              batch_size=args.batch_size,
-                                              momentum=args.momentum,
-                                              checkpoint_path=args.checkpoint_path)
-    report_result(model_ref, args.data_path, args.use_gpu)
+    model_path = nn_clf.fit(data_path=args.data_path,
+                            learning_rate_policy='cosine',
+                            learning_rate_init=args.max_learning_rate,
+                            num_cycles=args.num_cycles,
+                            epochs_per_cycle=args.epochs_per_cycle,
+                            dump_koeff=args.dump_koeff,
+                            batch_size=args.batch_size,
+                            momentum=args.momentum,
+                            checkpoint_path=args.checkpoint_path)
+
+    report_result(model_path, args.data_path, args.use_gpu)
 
 def train_with_const_learning_rate(args):
     """ Train model with constant learning rate.
@@ -178,7 +179,7 @@ def train_with_const_learning_rate(args):
                                  dropout=args.dropout,
                                  use_gpu=args.use_gpu)
 
-    model_ref = nn_clf.fit(data_path=args.data_path,
+    model_path = nn_clf.fit(data_path=args.data_path,
                                               learning_rate_policy='constant',
                                               learning_rate_init=args.learning_rate,
                                               num_cycles=args.epochs,
@@ -186,10 +187,11 @@ def train_with_const_learning_rate(args):
                                               batch_size=args.batch_size,
                                               momentum=args.momentum,
                                               checkpoint_path=args.checkpoint_path)
-    report_result(model_ref, args.data_path, args.use_gpu)
+    report_result(model_path, args.data_path, args.use_gpu)
 
-def report_result(model_ref, data_path, use_gpu):
+def report_result(model_path, data_path, use_gpu):
     """ Print model's training results.
+        Demonstrate loading model from a checkpoint file.
 
 	Parameters:
 	----------
@@ -197,23 +199,21 @@ def report_result(model_ref, data_path, use_gpu):
 	data_path: path to directory with train/valid/test data.
 	use_gpu: use Gpu if True
     """
-    ref = CheckpointStore.read(model_ref)
-    print("Model path: {}".format(ref['model']))
-    print("Model ref: {}".format(model_ref))
-    print("Model accuracy, validation: {:0.3f}".format(ref['score']))
-
-    acc = model_accuracy(ref['model'], data_path, use_gpu)
-    print("Model accuracy, test: {:0.3f}".format(acc))
-
-def model_accuracy(model_path, data_path, use_gpu):
-    """ Compute model's accuracy on test data set.
-    """
-    checkpoint = CheckpointStore.read(model_path)
-    clf = NeuralNetClassifier(checkpoint=checkpoint,
+    print("\nSummary:")
+    print("----------:")
+    print("Model path: {}".format(model_path))
+ 
+    clf = NeuralNetClassifier(checkpoint=CheckpointStore.read(model_path),
                               use_gpu=use_gpu)
     datasource = make_dataloaders(data_path)
-    acc = clf.accuracy(datasource.test)
-    return acc
+
+    train_acc = clf.accuracy(datasource.train)
+    valid_acc = clf.accuracy(datasource.valid)
+    test_acc = clf.accuracy(datasource.test) 
+    
+    print("Model accuracy, train: {:0.3f}".format(train_acc))
+    print("Model accuracy, valid: {:0.3f}".format(valid_acc))
+    print("Model accuracy, test:  {:0.3f}".format(test_acc))
 
 if __name__ == '__main__':
     exit(main())

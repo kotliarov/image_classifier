@@ -3,8 +3,8 @@ python train.py adjust-learn-rate \
  --data-path=flowers \
  --checkpoint-path="$1" \
  --gpu \
- --arch-name=vgg19 \
- --hidden-layers 4096 \
+ --arch-name=densenet161 \
+ --hidden-layers 512 \
  --output-size=102 \
  --dropout=0.3 \
  --batch-size=96 \
